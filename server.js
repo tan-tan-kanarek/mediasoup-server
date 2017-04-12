@@ -5,9 +5,12 @@ const os = require('os');
 const ip = require('ip');
 const fs = require('fs');
 const net = require('net');
+const url = require('url');
+const rtp = require('rtp-rtcp');
 const udid = require('udid');
 const util = require('util');
 const path = require('path');
+const rtsp = require('rtsp-stream');
 const dgram = require('dgram');
 const https = require('https');
 const express = require('express');
@@ -20,13 +23,6 @@ const RTCPeerConnection = mediasoup.webrtc.RTCPeerConnection;
 const RTCSessionDescription = mediasoup.webrtc.RTCSessionDescription;
 const roomOptions = require('./data/options').roomOptions;
 const peerCapabilities = require('./data/options').peerCapabilities;
-
-const StreamMethods = {
-	SEPERATE_STREAMS_TO_SINGLE_OUTPUT: 1,
-	SEPERATE_STREAMS_TO_SEPERATE_OUTPUTS: 2,
-	AUDIO_ONLY: 3,
-	ALL_STREAMS_TO_SINGLE_OUTPUT: 4
-};
 
 const OutputTypes = {
 	RTMP: 1,
@@ -50,64 +46,67 @@ class Room {
 		let This = this;
 
 		return new Promise((resolve, reject) => {
-    		Room.soupServer.createRoom(roomOptions)
-    		.then((room) => {
-    			This.soup = room;
-    			resolve(This);
-    		})
-    		.catch((err) => reject(err));
+			Room.soupServer.createRoom(roomOptions)
+			.then((room) => {
+				This.soup = room;
+				resolve(This);
+			})
+			.catch((err) => reject(err));
 		});
 	}
 
 }
 
+const max32 = Math.pow(2, 32) - 1;
+
 class Connection {
 	constructor(server, socket){
-		if(!Connection.udpPort) {
-			Connection.udpPort = 33400;
-		}
-		
 		this.server = server;
 		this.socket = socket;
 		this.peerconnection = null;
-		
+
 		this.id = socket.id;
+//		this.id = Math.floor(Math.random() * max32).toString();
+		this.sdp = null;
 		this.roomId = null;
 
 		let This = this;
 
+		server.addConnection(this);
+		
 		// socket.io
 		socket.on('disconnect', () => {
-        	This.closePeerConnection();
-        });
-        
+			This.closePeerConnection();
+			server.removeConnection(This.id);
+		});
+		
 		socket.on('error', (err) => {
-        	console.error('ERROR:', err);
-        });
+			console.error('ERROR:', err);
+		});
 
 		socket.on('list', () => {
-        	This.send('list', This.server.getRoomsList());
-        });
+			This.send('list', This.server.getRoomsList());
+		});
 
 		socket.on('create-room', (name) => {
-        	This.server.addRoom(name).
-    		then((room) => {
-    			This.send('room-created', {
-                	id: room.id,
-                	name: room.name
-                });
-    		});
-        });
+			This.server.addRoom(name).
+			then((room) => {
+				This.send('room-created', {
+					id: room.id,
+					name: room.name
+				});
+			});
+		});
 
 		socket.on('join', (message) => {
 			socket.join(message.roomId);
 			This.roomId = message.roomId;
-        	This.handleOffer(message.sdp, message.planb, message.roomId);
-        });
+			This.handleOffer(message.sdp, message.planb, message.roomId);
+		});
 
 		socket.on('quit', () => {
-        	This.closePeerConnection();
-        });
+			This.closePeerConnection();
+		});
 	}
 
 	debug(message) {
@@ -126,8 +125,8 @@ class Connection {
 
 	closePeerConnection() {
 		if(this.peerconnection) {
-            this.peerconnection.close();
-            this.peerconnection = null;
+			this.peerconnection.close();
+			this.peerconnection = null;
 		}
 	}
 
@@ -135,8 +134,8 @@ class Connection {
 		const option = { usePlanB: usePlanB };
 
 		let desc = new RTCSessionDescription({
-    		type : 'offer',
-    		sdp  : sdp
+			type : 'offer',
+			sdp	: sdp
 		});
 
 		let This = this;
@@ -146,20 +145,20 @@ class Connection {
 		let peerconnection = this.peerconnection;
 		peerconnection.on('close', function(err) {
 			if(err) {
-				console.error(`PeerConnection [${This.id}] closed,  err: ${err}`);
+				console.error(`PeerConnection [${This.id}] closed,	err: ${err}`);
 			}
 			else {
 				This.debug(`PeerConnection [${This.id}] closed`);
 			}
 		});
 		peerconnection.on('signalingstatechange', function() {
-			This.debug(`PeerConnection [${This.id}] signaling state changed,  state: ${peerconnection.signalingState}`);
-		});      
+			This.debug(`PeerConnection [${This.id}] signaling state changed,	state: ${peerconnection.signalingState}`);
+		});		
 
 		// Set the remote SDP offer
 		peerconnection.setRemoteDescription(desc)
 		.then(() => {
-    		return peerconnection.createAnswer();
+			return peerconnection.createAnswer();
 		})
 		.then((desc) => {
 			return peerconnection.setLocalDescription(desc);
@@ -179,23 +178,23 @@ class Connection {
 		peerconnection.on('negotiationneeded', () => {
 			This.debug(`PeerConnection [${This.id}] negotiation needed`);
 			peerconnection.createOffer()
-    		.then((desc) => {
-    			return peerconnection.setLocalDescription(desc);
-    		})
-    		.then(() => {
-    			This.sendOffer();
-    			This.sendStream();
-    		})
-    		.catch((error) => {
-    			console.error(`Error handling SDP re-offer id[${This.id}], err: ${error}`);
-    		});
+			.then((desc) => {
+				return peerconnection.setLocalDescription(desc);
+			})
+			.then(() => {
+				This.sendOffer();
+				This.sendStream();
+			})
+			.catch((error) => {
+				console.error(`Error handling SDP re-offer id[${This.id}], err: ${error}`);
+			});
 		});
 	}
 
 	handleAnswer(sdp) {
 		let desc = new RTCSessionDescription({
-    		type : 'answer',
-    		sdp  : sdp
+			type : 'answer',
+			sdp	: sdp
 		});
 
 		let This = this;
@@ -206,7 +205,7 @@ class Connection {
 			This.debug(`PeerConnection [${this.id}] set remote description`);
 		})
 		.catch( (err) => {
-    		console.eror(`PeerConnection [${this.id}] set remote description error: ${err}`);
+			console.eror(`PeerConnection [${this.id}] set remote description error: ${err}`);
 		});
 	}
 
@@ -221,380 +220,475 @@ class Connection {
 		let sessionDescription = this.peerconnection.localDescription;
 		this.send(sessionDescription.type, sessionDescription.sdp);
 	}
+	
+	//TODO - execute the ffmpeg on remote machine
+	ffmpeg(input) {
+		let args = [
+			'-loglevel', 'debug',	
+			'-max_delay', '5000', 
+//			'-thread_queue_size', '2048', 
+			'-reorder_queue_size', '16384', 
+//			'-analyzeduration', '2147483647', 
+//			'-probesize', '2147483647', 
+			'-protocol_whitelist', 'file,crypto,tcp,udp,rtp',
+//			'-rtbufsize', '128000k',
+			'-re',  
+			'-i', input,
+		];
 
-	createMediaSdp(rtpReceiver, port) {
+//		args.push('-c', 'copy');
+		args.push('-vcodec', 'copy');
+		args.push('-acodec', 'aac');
 		
-		let media = {
-			rtp: [],
-			ext: [],
-			type: rtpReceiver.kind,
-			mid: rtpReceiver.rtpParameters.muxId,
-			port: port,
-			quality: 10,
-			protocol: 'RTP/SAVPF',
-			rtcpMux: 'rtcp-mux',
-			direction: 'sendrecv'
+//		args.push('-vsync', 'passthrough');
+//		args.push('-q', '10');
+//		args.push('-max_interleave_delta', '30000000');
+//		args.push('-max_delay', '100000');
+//		args.push('-framerate', '50');
+		args.push('-shortest');
+//		args.push('-map', '0:v', '-map', '1:a');
+
+		if(this.server.options.outputType === OutputTypes.RTMP) {
+			args.push('-f', 'flv');
+			args.push(this.server.options.rtmpURL + this.id);
+		}
+		else {
+			let ext = this.server.options.outputType === OutputTypes.MKV ? 'mkv' : 'mp4'
+			let outputFilePath = this.server.options.recordedMediaPath +	`/${this.id}.${ext}`;
+			args.push('-y');
+			args.push(outputFilePath);
+		}
+		
+		let ffmpeg = this.server.options.ffmpegPath;
+		let command = ffmpeg + ' ' + args.join(' ');
+		console.log('Executing: ' + command);
+		return child_process.spawn(ffmpeg, args);
+	}
+	
+	//TODO - execute the vlc on remote machine
+	vlc(input) {
+		
+		// cvlc -vvv --play-and-exit --sout-ffmpeg-strict=-2 --sout "#transcode{acodec=mp4a,ab=128,channels=2,samplerate=44100}:std{access=file,mux=mp4,dst=output2.mp4}" rtsp://dev-hudson10.dev.kaltura.com:5000/FkPeypd8i2vHvGq6AAAB.sdp
+
+		let args = [
+			'-vvv',	
+			'--play-and-exit',
+			'--sout-ffmpeg-strict=-2', 
+			'--audio-desync=-2000', 
+//			'--no-sout-display',
+//			'--sout-keep',
+			'--sout-mux-caching=4096', // 2147483647
+//			'--no-sout-smem-time-sync',
+//			'--packetizer-mpegvideo-sync-iframe',
+//			'--clock-synchro=1',
+		];
+
+//		let transcode = 'transcode{acodec=mp4a,ab=128,channels=2,samplerate=44100}';
+		let transcode = 'transcode{acodec=mp4a,samplerate=44100}';
+		if(this.server.options.outputType === OutputTypes.RTMP) {
+//			args.push(`--sout=${transcode}:rtmp{url=${this.server.options.rtmpURL},name=${this.id}}`);
+			args.push(`--sout=#${transcode}:std{access=rtmp,mux=ffmpeg{mux=flv},dst=${this.server.options.rtmpURL}${this.id}}`);
+		}
+		else if(this.server.options.outputType === OutputTypes.MP4) {
+			let outputFilePath = this.server.options.recordedMediaPath +	`/${this.id}.mp4`;
+			args.push(`--sout=#${transcode}:std{access=file,mux=mp4,dst=${outputFilePath}}`);
+//			args.push(`--sout=#std{access=file,mux=mp4,dst=${outputFilePath}}`);
+		}
+
+		args.push(input);
+
+		let vlc = this.server.options.vlcPath;
+		let command = vlc + ' ' + args.join(' ');
+		console.log('Executing: ' + command);
+		return child_process.spawn(vlc, args);
+	}
+	
+	forwardStream(sdp) {
+
+		let input;
+		if(this.server.options.rtspPort) {
+			this.sdp = sdp;
+			input = `rtsp://${this.server.hostname}:${this.server.options.rtspPort}/${this.id}.sdp`;
+			console.log('RTSP URL: ' + input);
+		}
+		else {
+			let sdpFilePath = this.server.options.sdpPath + `/${this.id}.sdp`;
+			console.log('Saving SDP file ' + sdpFilePath);
+			fs.writeFileSync(sdpFilePath, sdp);
+			input = sdpFilePath;
+		}
+		
+		let process = null;
+		if(this.server.options.ffmpegPath) {
+			process = this.ffmpeg(input);
+		}
+		else if(this.server.options.vlcPath) {
+			process = this.vlc(input);
+		}
+		
+		if(process) {
+			let logPath = this.server.options.logPath + `/${this.id}.log`;
+			let log = fs.createWriteStream(logPath);
+			
+    		process.stdout.on('data', (data) => {
+    			let message = data.toString('utf8')
+    			log.write(message);
+    		});
+    
+    		process.stderr.on('data', (data) => {
+    			let message = data.toString('utf8')
+    			log.write(message);
+    		});
+    
+    		process.on('error', (err) => {
+    			console.error('Process [ffmpeg] error: ' + err);
+    		});
+    
+    		process.on('exit', (code, signal) => {
+    			log.end();
+    			console.log(`Process [${this.id}] closed, log: ` + logPath);
+    		});
+		}
+	}
+
+	enableRtpPlayback(rtpReceiver) {
+		let This = this;
+		rtpReceiver.forwardPort = 0;
+		
+		let socket = dgram.createSocket('udp4');
+		socket.on('error', (err) => {
+			console.log(`UDP socket error:\n${err.stack}`);
+			socket.close();
+		});
+
+		rtpReceiver.on('rtpraw', (packet) => {
+			if(This.shouldPlay && rtpReceiver.forwardPort) {
+//				let newPacket = new rtp.RtpPacket(packet);
+//				newPacket.setSSRC(parseInt(This.id, 10));
+//				socket.send(newPacket.getBuffer(), rtpReceiver.forwardPort, rtpReceiver.forwardAddress);
+				socket.send(packet, rtpReceiver.forwardPort, rtpReceiver.forwardAddress);
+			}
+		});
+		rtpReceiver.on('close', (packet) => {
+			socket.close();
+		});
+		
+	}
+	
+	play(){
+		this.shouldPlay = true;
+	}
+
+	pause(){
+		this.shouldPlay = false;
+	}
+
+
+	sendStream() {
+		this.streams = [];
+		
+		let peer = this.peerconnection.peer;
+		
+		console.log('Build ' + peer.rtpReceivers.length + ' media descriptors');
+
+		let description = {
+			version: 0,
+			origin: {
+				username: 'mediasoup',
+				sessionId: this.id,
+				sessionVersion: 0,
+				netType: 'IN',
+				ipVer: 4,
+				address: this.server.ip 
+			},
+			name: this.id,
+			timing: {
+				start: 0, 
+				stop: 0 
+			},
+			connection: {
+				version: 4, 
+				ip: this.server.ip 
+			},
+			media: [],
+			groups: [],
+//			ssrcGroups: [],
 		};
 
-//		console.log(util.inspect(rtpReceiver.rtpParameters, {depth: 10}));
+		let mids = [];
+//		let ssrcs = [];
 		
-		let payloads = [];
-		for(let i = 0; i < rtpReceiver.rtpParameters.codecs.length; i++){
-			let codec = rtpReceiver.rtpParameters.codecs[i];
-			let payload = codec.payloadType;
-			media.rtp.push({
-				payload: payload,
-				codec: codec.name.substr(codec.name.indexOf('/') + 1),
-				rate: codec.clockRate
-			});
-			payloads.push(payload);
+		this.shouldPlay = false;
+		for(let i = 0; i < peer.rtpReceivers.length; i++) {
+			let rtpReceiver = peer.rtpReceivers[i];
 			
-			if(codec.parameters) {
-				let configs = [];
+			this.enableRtpPlayback(rtpReceiver);
+			this.streams[i] = rtpReceiver;
 
-				for(let parameter in codec.parameters) {
-					let parameterName = parameter.split(/(?=[A-Z])/).join('-').toLowerCase();
-					configs.push(parameterName + '=' + codec.parameters[parameter]);
-				}
-				
-				if(configs.length) {
-					if(!media.fmtp) {
-						media.fmtp = [];
-					}
-
-					media.fmtp.push({
-						payload: payload,
-						config: configs.join(';')
-					});	
-				}
-			}
+//			let ssrc = rtpReceiver.rtpParameters.encodings[0].ssrc;
+//			ssrcs.push(ssrc);
 			
-			if(codec.rtcpFeedback && codec.rtcpFeedback.length) {
-				if(!media.rtcpFb) {
-					media.rtcpFb = [];
-				}
-				for(let j = 0; j < codec.rtcpFeedback.length; j++) {
-					let rtcpFeedback = codec.rtcpFeedback[j];
-					media.rtcpFb.push({
-						payload: payload,
-						type: rtcpFeedback.type,
-						subtype: rtcpFeedback.parameter,
-					});
-				}
-			}
-		}
-		media.payloads = payloads.join(' ');
-
-		for(let i = 0; i < rtpReceiver.rtpParameters.headerExtensions.length; i++){
-			let headerExtension = rtpReceiver.rtpParameters.headerExtensions[i];
-			media.ext.push({
-				value: headerExtension.id, 
-				uri: headerExtension.uri
-			});
-		}
-		
-		return media;
-	}
-	
-	openStreamSocket(rtpReceiver) {
-		let This = this;
-		
-		return new Promise((resolve, reject) => {
-
-			Connection.udpPort += 2;
-			let port = Connection.udpPort;
-
-
-			console.log('Streaming UDP (' + port + ') for ' + This.id + ' ' + rtpReceiver.kind);
-			let socket = dgram.createSocket('udp4');
-			socket.on('error', (err) => {
-	            console.log(`UDP socket error:\n${err.stack}`);
-	            socket.close();
-	        });
-	        
-			let media = This.createMediaSdp(rtpReceiver, port);
-			resolve(media);
-			rtpReceiver.on('rtpraw', (packet) => {
-				socket.send(packet, port, This.server.ip);
-			});
-			rtpReceiver.on('close', (packet) => {
-				socket.close();
-			});
-		});
-	}
-
-	//TODO - execute the ffmpeg on remote machine
-	forwardStream(sdp, type) {
-		let This = this;
-		
-		let sdpFilePath = This.server.options.sdpPath + `/${This.id}.sdp`;
-		if(type) {
-			sdpFilePath = This.server.options.sdpPath + `/${This.id}.${type}.sdp`;
-		}
-		
-		console.log('Saving SDP file ' + sdpFilePath);
-		fs.writeFile(sdpFilePath, sdp, () => {
-
-			let args = [
-				'-loglevel', 'debug',  
-				'-max_delay', '5000', 
-//				'-thread_queue_size', '2048', 
-				'-reorder_queue_size', '16384', 
-//				'-analyzeduration', '2147483647', 
-//				'-probesize', '2147483647', 
-				'-protocol_whitelist', 'file,crypto,udp,rtp',
-//				'-rtbufsize', '128000k',
-				'-re', 
-				'-i', sdpFilePath,
-			];
-
-//			args.push('-c', 'copy');
-			if(!type || type == 'video') {
-//				args.push('-vcodec', 'copy');
-				args.push('-vcodec', 'h264');
-			}
-			if(!type || type == 'audio') {
-//				args.push('-acodec', 'copy');
-				args.push('-acodec', 'aac');
-			}
+			let mid = rtpReceiver.rtpParameters.muxId;
+			mids.push(mid);
 			
-//			args.push('-vsync', 'passthrough');
-//			args.push('-q', '10');
-			args.push('-max_interleave_delta', '30000000');
-//			args.push('-max_delay', '100000');
-//			args.push('-framerate', '50');
-//			args.push('-shortest');
-//			args.push('-map', '0:v', '-map', '0:a');
-
-			if(This.server.options.outputType === OutputTypes.RTMP) {
-				args.push('-f', 'flv');
-				args.push(This.server.options.rtmpURL + This.id);
-			}
-			else {
-				let ext = This.server.options.outputType === OutputTypes.MKV ? 'mkv' : 'mp4'
-				let outputFilePath = This.server.options.recordedMediaPath +  `/${This.id}.${ext}`;
-				if(type) {
-					outputFilePath = This.server.options.recordedMediaPath +  `/${This.id}.${type}.${ext}`;
-				}
-				args.push('-y');
-				args.push(outputFilePath);
-			}
-
-			
-			let ffmpeg = This.server.options.ffmpegPath;
-			let command = ffmpeg + ' ' + args.join(' ');
-			console.log('Executing: ' + command);
-			let process = child_process.spawn(ffmpeg, args);
-			
-			process.stdout.on('data', (data) => {
-				console.log(data.toString('utf8'));
-			});
-
-			process.stderr.on('data', (data) => {
-				console.error(data.toString('utf8'));
-			});
-		});
-	}
-
-	// TODO - execute the ffmpeg on remote machine
-	forwardStreams(sdps) {
-		let This = this;
-		
-		console.log('Saving SDP files');
-
-		Promise.all(sdps.map((sdp, index) => {
-			return new Promise((resolve, reject) => {
-				let sdpFilePath = This.server.options.sdpPath + `/${This.id}.${index}.sdp`;
-				fs.writeFile(sdpFilePath, sdp, () => {
-					resolve(sdpFilePath);
-				});
-			});
-		}))
-		.then((sdpFilePaths) => {
-			
-			let args = [
-				'-loglevel', 'debug', 
-				
-				'-max_delay', '5000', 
-				'-reorder_queue_size', '16384',
-				'-protocol_whitelist', 'file,crypto,udp,rtp',
-				'-re', '-i', sdpFilePaths[0],
-
-				'-max_delay', '5000', 
-				'-reorder_queue_size', '16384',
-				'-protocol_whitelist', 'file,crypto,udp,rtp',			
-				'-re', '-i', sdpFilePaths[1],
-
-//				'-c', 'copy',
-				'-vcodec', 'h264',
-				'-acodec', 'aac',
-//				'-vsync', 'passthrough',
-//				'-shortest', 
-			];
-
-			if(This.server.options.outputType === OutputTypes.RTMP) {
-				args.push('-f', 'flv');
-				args.push(This.server.options.rtmpURL + This.id);
-			}
-			else {
-				let ext = This.server.options.outputType === OutputTypes.MKV ? 'mkv' : 'mp4'
-				let outputFilePath = This.server.options.recordedMediaPath +  `/${This.id}.${ext}`;
-				args.push('-y');
-				args.push(outputFilePath);
-			}
-
-			let ffmpeg = This.server.options.ffmpegPath;
-			let command = ffmpeg + ' ' + args.join(' ');
-			console.log('Executing: ' + command);
-			let process = child_process.spawn(ffmpeg, args);
-			
-			process.stdout.on('data', (data) => {
-				console.log(data.toString('utf8'));
-			});
-
-			process.stderr.on('data', (data) => {
-				console.error(data.toString('utf8'));
-			});
-		})
-		.catch( (err) => {
-			console.eror('Saving SDP files error:', err)
-		});;
-	}
-	
-	sendStream() {
-		let peer = this.peerconnection.peer;
-		let This = this;
-		
-		Promise.all(peer.rtpReceivers.map((rtpReceiver) => {
-			return This.openStreamSocket(rtpReceiver);
-		}))
-		.then((media) => {
-			console.log('Build ' + media.length + ' media descriptors');
-
-			media.sort((a, b) => {
-				if(a.type == b.type) {
-					return 0;
-				}
-				
-				if(a.type == 'video') {
-					return -1;
-				}
-				
-				return 1;
-			});
-
-			let mids = [];
-			for(let i = 0; i <= media.length; i++) {
-				if(!media[i]) {
-					continue;
-				}
-
-				mids.push(media[i].mid);
-				media[i].control = 'track' + i;
-			}
-
-			let description = {
-	            version: 0,
-	            origin: {
-	            	username: 'mediasoup',
-	                sessionId: This.id,
-	                sessionVersion: 0,
-	                netType: 'IN',
-	                ipVer: 4,
-	                address: This.server.ip 
-	            },
-	            name: This.id,
-	            timing: {
-	            	start: 0, 
-	            	stop: 0 
-	            },
-	            connection: {
-	            	version: 4, 
-	            	ip: This.server.ip 
-	            },
-//	            groups: [{
-//	            	type: 'LS',
-////	            	type: 'FID',
-////	            	type: 'DDP',
-//	            	mids: mids.join(' ')
-//	            }]
+			let media = {
+				rtp: [],
+				ext: [],
+				type: rtpReceiver.kind,
+//				ssrcs: [{
+//					id: ssrc
+//				}],
+				mid: mid,
+				port: 0,
+				quality: 10,
+//				protocol: 'RTP/SAVPF',
+				protocol: 'RTP/AVP',
+//				rtcpMux: 'rtcp-mux',
+//				direction: 'sendrecv',
+				direction: 'recvonly',
+				control: 'streamid=' + i
 			};
 
-			// send stream seperatly into the same output
-			// working but the sync between video and audio get lost
-			if(This.server.options.streamMethod === StreamMethods.SEPERATE_STREAMS_TO_SINGLE_OUTPUT) {
-				let sdps = [];
-				for(let i = 0; i <= media.length; i++) {
-					let stream = media[i];
-					if(!stream) {
-						continue;
+//			console.log(util.inspect(rtpReceiver.rtpParameters, {depth: 10}));
+			
+			let payloads = [];
+			for(let i = 0; i < rtpReceiver.rtpParameters.codecs.length; i++){
+				let codec = rtpReceiver.rtpParameters.codecs[i];
+				let payload = codec.payloadType;
+				media.rtp.push({
+					payload: payload,
+					codec: codec.name.substr(codec.name.indexOf('/') + 1),
+					rate: codec.clockRate
+				});
+				payloads.push(payload);
+				
+				if(codec.parameters) {
+					let configs = [];
+
+					for(let parameter in codec.parameters) {
+						let parameterName = parameter.split(/(?=[A-Z])/).join('-').toLowerCase();
+						configs.push(parameterName + '=' + codec.parameters[parameter]);
 					}
-					description.media = [stream];
-					sdps[i] = sdp_transform.write(description);
-				}
-				This.forwardStreams(sdps);
-			}
-			
+					
+					if(configs.length) {
+						if(!media.fmtp) {
+							media.fmtp = [];
+						}
 
-			
-			
-			// send each stream to different output
-			// works perfect
-			if(This.server.options.streamMethod === StreamMethods.SEPERATE_STREAMS_TO_SEPERATE_OUTPUTS) {
-    			for(let i = 0; i <= media.length; i++) {
-    				description.media = [media[i]];
-    				let sdp = sdp_transform.write(description);
-    				This.forwardStream(sdp, media[i].type);
-    			}
-			}
-			
-			
-
-			// send only the audio stream
-			if(This.server.options.streamMethod === StreamMethods.AUDIO_ONLY) {
-				let stream;
-				for(let i = 0; i <= media.length; i++) {
-					if(media[i].type == 'audio') {
-						stream = media[i];
-						break;
+						media.fmtp.push({
+							payload: payload,
+							config: configs.join(';')
+						});	
 					}
 				}
-				description.media = [stream];
-				let sdp = sdp_transform.write(description);
-				This.forwardStream(sdp);
+				
+				if(codec.rtcpFeedback && codec.rtcpFeedback.length) {
+					if(!media.rtcpFb) {
+						media.rtcpFb = [];
+					}
+					for(let j = 0; j < codec.rtcpFeedback.length; j++) {
+						let rtcpFeedback = codec.rtcpFeedback[j];
+						media.rtcpFb.push({
+							payload: payload,
+							type: rtcpFeedback.type,
+							subtype: rtcpFeedback.parameter,
+						});
+					}
+				}
 			}
-			
+			media.payloads = payloads.join(' ');
 
-			// send both stream together to the same output
-			// the output plays each time either the video or the audio, never bith of them together in sync
-			if(This.server.options.streamMethod === StreamMethods.ALL_STREAMS_TO_SINGLE_OUTPUT) {
-				description.groups = [{
-	            	type: 'LS',
-//	            	type: 'FID',
-//	            	type: 'DDP',
-	            	mids: mids.join(' ')
-	            }];
-        		description.media = media;
-        		let sdp = sdp_transform.write(description);
-        		This.forwardStream(sdp);
+			for(let i = 0; i < rtpReceiver.rtpParameters.headerExtensions.length; i++){
+				let headerExtension = rtpReceiver.rtpParameters.headerExtensions[i];
+				media.ext.push({
+					value: headerExtension.id, 
+					uri: headerExtension.uri
+				});
 			}
-		})
-		.catch( (err) => {
-			console.eror('Open stream socket error:', err)
+
+			description.media.push(media);
+		}
+
+		description.groups.push({
+//    		type: 'BUNDLE',
+			type: 'LS',
+//    		type: 'FID',
+//    		type: 'DDP',
+			mids: mids.join(' ')
 		});
+    		
+//    	description.ssrcGroups.push({
+//    		semantics: 'FID',
+//    		ssrcs: ssrcs.join(' ')
+//    	});
+
+		let sdp = sdp_transform.write(description);
+		this.forwardStream(sdp);
+	}
+}
+
+class RtspServer {
+	constructor(server){
+		this.server = server;
+		
+		let This = this;
+		
+		this.rtspServer = net.createServer((client) => {
+			console.log('RTSP client connected');
+
+			client.on('error', (err) => {
+				console.error('RTSP client error: ' + err);
+			});
+			client.on('end', () => {
+				console.log('RTSP client disconnected');
+			});
+			client.on('close', () => {
+				console.log('RTSP client closed');
+			});
+
+			var decoder = new rtsp.Decoder();
+			var encoder = new rtsp.Encoder();
+
+			decoder.on('request', function (request) {
+				This.debug(request.method + ' ' + request.uri + ' ' + util.inspect(request.headers));
+			
+				var response = encoder.response()
+				response.setHeader('CSeq', request.headers['cseq']);
+				response.setHeader('Date', new Date().toGMTString());
+			
+				This.handleRequest(client, request, response);
+			})
+
+			decoder.on('error', function (err) {
+				console.error(err);
+				client.destroy();
+			})
+
+			client.pipe(decoder);
+			encoder.pipe(client);
+		});
+
+		this.rtspServer.on('error', (err) => {
+			console.log('RTSP error: ' + err);
+		});
+		this.rtspServer.listen(server.options.rtspPort, () => {
+			console.log('RTSP server bound');
+		});
+	}
+
+	handleRequest(client, request, response) {
+    	let parsedUrl = url.parse(request.uri);
+    	let pattern, matches;
+
+    	if(client.connection && !client.connection.peerconnection) {
+           	response.statusCode = 404; // Not found
+    	}
+    	else {
+            switch (request.method) {
+                case 'OPTIONS':
+                	response.setHeader('Public', 'DESCRIBE, SETUP, TEARDOWN, PLAY', 'PAUSE');
+                	break
+    
+                case 'DESCRIBE':
+                	let sdp = null;
+                	
+                	pattern = /^\/([^./]+)\.sdp$/i;
+                	matches = pattern.exec(parsedUrl.path);
+                	if(matches) {
+                    	client.id = matches[1];
+                    	client.connection = this.server.getConnection(client.id);
+                    	if(client.connection && client.connection.peerconnection) {
+                        	sdp = client.connection.sdp;
+                    	}
+                	}
+    
+                	pattern = /^\/([^/]+)\/([^.]+)\.sdp$/i;
+                	matches = pattern.exec(parsedUrl.path);
+                	if(matches) {
+                    	let type = matches[1];
+                    	client.id = matches[2];
+                    	client.connection = this.server.getConnection(client.id);
+                    	if(client.connection && client.connection.peerconnection) {
+                        	sdp = client.connection.sdp[type];
+                    	}
+                	}
+    
+                	if(sdp) {
+                    	response.setHeader('Content-Base', request.uri);
+                    	response.setHeader('Content-Type', 'application/sdp');
+                    	response.setHeader('Content-Length', sdp.length);
+                    	response.write(sdp);
+                    	break;
+                	}
+                	
+                   	response.statusCode = 404; // Not found
+                	break
+    
+                case 'SETUP':
+                	pattern = /\.sdp\/streamid=(\d+)$/i;
+                	matches = pattern.exec(parsedUrl.path);
+                	let streamId = parseInt(matches[1]);
+                	
+                	let transport = request.headers['transport'];
+                	let transportParts = transport.split(';');
+                	for(let i = 0; i < transportParts.length; i++) {
+                    	pattern = /^client_port=(\d+)-(\d+)$/i;
+                    	matches = pattern.exec(transportParts[i]);
+                		if(matches) {
+                			console.dir(client.address());
+                			let address = client.remoteAddress;
+                			if(net.isIPv6(address)) {
+                				let addressParts = address.split(':');
+                				address = addressParts[addressParts.length - 1];
+                			}
+                			let port = parseInt(matches[1]);
+                			this.debug('Set RTP address: ' + address + ':' + port);
+                			client.connection.streams[streamId].forwardAddress = address;
+                			client.connection.streams[streamId].forwardPort = port;
+                		}
+                	}
+                	response.setHeader('Transport', transport);
+                	response.setHeader('Session', client.id);
+                	break
+    
+                case 'PLAY':
+                	client.connection.play();
+                	response.setHeader('Session', client.id);
+                	break
+    
+                case 'PAUSE':
+                	client.connection.pause();
+                	response.setHeader('Session', client.id);
+                	break
+    
+                case 'TEARDOWN':
+                	response.setHeader('Session', client.id);
+                	break
+                	
+                default:
+                	response.statusCode = 501; // Not implemented
+            }
+    	}
+        
+        response.end();
+	}
+
+	debug(message) {
+		this.server.debug(message);
 	}
 }
 
 class Server {
 	constructor(options){
 		this.options = options;
-	    this.ip = ip.address();
-	    this.hostname = os.hostname();
-	    this.connections = {};
+		this.ip = ip.address();
+		this.hostname = os.hostname();
+		this.connections = {};
 		
-	    this.start();
-	    this.rooms = {};
-	    this.roomsList = {};
+		this.start();
+		this.connections = {};
+		this.rooms = {};
+		this.roomsList = {};
 	}
 	
 	getRoomsList() {
@@ -613,9 +707,22 @@ class Server {
 		return room.init();
 	}
 	
+	addConnection(connection) {
+		this.connections[connection.id] = connection;
+	}
+	
+	removeConnection(id) {
+		delete this.connections[id];
+	}
+	
+	getConnection(id) {
+		return this.connections[id];
+	}
+	
 	start() {
 		this.startWebServer();
-		this.startSocketIo();
+		this.startSocketIoServer();
+		this.startRtspServer();
 	}
 	
 	startWebServer() {
@@ -633,11 +740,15 @@ class Server {
 		app.use(express.static(this.options.webStaticPath));
 	}
 
-	startSocketIo() {
+	startSocketIoServer() {
 		this.io = socketIO(this.webServer);
 		this.io.on('connection', function(socket){
 			new Connection(server, socket);
 		});
+	}
+
+	startRtspServer() {
+		this.rtsp = new RtspServer(this);
 	}
 	
 	debug(msg) {
@@ -654,13 +765,16 @@ const server = new Server({
 	cert: fs.readFileSync('keys/server.crt'),
 	webPort: 3888,
 	webStaticPath: 'public',
-	
-	streamMethod: StreamMethods.SEPERATE_STREAMS_TO_SINGLE_OUTPUT,
+
 	sdpPath: path.join(__dirname, "recordings"),
+	logPath: path.join(__dirname, "recordings"),
 	recordedMediaPath: path.join(__dirname, "recordings"),
 	rtmpURL: 'rtmp://127.0.0.1:1936/live/',
-	outputType: OutputTypes.RTMP,
-	ffmpegPath: 'ffmpeg'
+	outputType: OutputTypes.MP4,
+//	ffmpegPath: 'ffmpeg',
+	vlcPath: 'cvlc',
+	
+	rtspPort: 5000
 });
 
 
