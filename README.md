@@ -43,5 +43,5 @@ $ npm start
 
 ## access with borwser
 
-* Open [http://localhost:3888/](http://localhost:3888/) with Chrome.
+* Open [http://localhost:3888/](http://localhost:3888/).
 * Set room name and click [Join] button
