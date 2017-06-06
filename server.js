@@ -1,6 +1,6 @@
 'use strict';
 
-process.env.DEBUG = "mediasoup*";
+//process.env.DEBUG = "mediasoup*";
 	
 
 const os = require('os');
@@ -24,7 +24,6 @@ const mediasoup = require('mediasoup');
 const RTCPeerConnection = mediasoup.webrtc.RTCPeerConnection;
 const RTCSessionDescription = mediasoup.webrtc.RTCSessionDescription;
 const roomOptions = require('./data/options').roomOptions;
-const peerCapabilities = require('./data/options').peerCapabilities;
 
 const OutputTypes = {
 	RTMP: 1,
@@ -102,9 +101,15 @@ class Connection {
 
 		socket.on('join', (message) => {
 			This.debug(`Receive [${This.id}] [join] room id [${message.roomId}]`);
-			socket.join(message.roomId);
-			This.roomId = message.roomId;
-			This.handleOffer(message.sdp, message.planb);
+			let room = This.server.getRoom(message.roomId);
+			if(room) {
+    			socket.join(message.roomId);
+    			This.roomId = message.roomId;
+    			This.handleOffer(message.sdp, message.planb);
+			}
+			else {
+				This.send('error', 'Room not found');
+			}
 		});
 
 		socket.on('joined', (answer) => {
@@ -180,7 +185,12 @@ class Connection {
 	}
 
 	handleAnswer(answer) {
-		this.peerconnection.setRemoteDescription(answer);
+		let This = this;
+		
+		this.peerconnection.setRemoteDescription(answer)
+		.then(() => {
+			This.sendStream();
+		});
 	}
 
 	sendOffer() {
@@ -193,7 +203,6 @@ class Connection {
 		.then(() => {
 			let sessionDescription = This.peerconnection.localDescription;
 			This.send(sessionDescription.type, sessionDescription.sdp);
-			This.sendStream();
 		})
         .catch((err) => {
         	console.error(err);
@@ -620,6 +629,9 @@ class RtspServer {
                 			if(net.isIPv6(address)) {
                 				let addressParts = address.split(':');
                 				address = addressParts[addressParts.length - 1];
+                				if(address === '1') {
+                					address = '127.0.0.1';
+                				}
                 			}
                 			let port = parseInt(matches[1]);
                 			this.debug('Set RTP address: ' + address + ':' + port);
@@ -753,7 +765,7 @@ const server = new Server({
 	rtmpURL: 'rtmp://127.0.0.1:1936/live/',
 	outputType: OutputTypes.MP4,
 //	ffmpegPath: 'ffmpeg',
-//	vlcPath: 'cvlc',
+	vlcPath: 'cvlc',
 	
 	rtspPort: 5000,
 
