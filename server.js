@@ -1,12 +1,13 @@
 'use strict';
 
+process.env.DEBUG = "mediasoup*";
+	
 
 const os = require('os');
 const ip = require('ip');
 const fs = require('fs');
 const net = require('net');
 const url = require('url');
-const rtp = require('rtp-rtcp');
 const udid = require('udid');
 const util = require('util');
 const path = require('path');
@@ -14,6 +15,7 @@ const rtsp = require('rtsp-stream');
 const dgram = require('dgram');
 const https = require('https');
 const express = require('express');
+const Promise = require('bluebird');
 const socketIO = require('socket.io');
 const child_process = require('child_process');
 const sdp_transform = require('sdp-transform');
@@ -32,25 +34,22 @@ const OutputTypes = {
 
 class Room {
 	
-	constructor(name){
-		if(!Room.soupServer){
-			Room.soupServer = mediasoup.Server();
-		}
-
+	constructor(mediaServer, name){
 		const d = new Date();
 		this.id = udid('y' + name + d.getTime());
 		this.name = name;
+		this.mediaServer = mediaServer;
 	}
 	
 	init() {
 		let This = this;
 
 		return new Promise((resolve, reject) => {
-			Room.soupServer.createRoom(roomOptions)
-			.then((room) => {
-				This.soup = room;
+			This.mediaServer.createRoom(roomOptions)
+    	    .then((mediaRoom) => {
+				This.mediaRoom = mediaRoom;
 				resolve(This);
-			})
+    	    })
 			.catch((err) => reject(err));
 		});
 	}
@@ -69,6 +68,7 @@ class Connection {
 //		this.id = Math.floor(Math.random() * max32).toString();
 		this.sdp = null;
 		this.roomId = null;
+		this.mediaPeer = null;
 
 		let This = this;
 
@@ -85,10 +85,12 @@ class Connection {
 		});
 
 		socket.on('list', () => {
+			This.debug(`Receive [${This.id}] [list]`);
 			This.send('list', This.server.getRoomsList());
 		});
 
 		socket.on('create-room', (name) => {
+			This.debug(`Receive [${This.id}] [create-room] name [${name}]`);
 			This.server.addRoom(name).
 			then((room) => {
 				This.send('room-created', {
@@ -99,12 +101,19 @@ class Connection {
 		});
 
 		socket.on('join', (message) => {
+			This.debug(`Receive [${This.id}] [join] room id [${message.roomId}]`);
 			socket.join(message.roomId);
 			This.roomId = message.roomId;
-			This.handleOffer(message.sdp, message.planb, message.roomId);
+			This.handleOffer(message.sdp, message.planb);
+		});
+
+		socket.on('joined', (answer) => {
+			This.debug(`Receive [${This.id}] [joined]`);
+			This.handleAnswer(answer);
 		});
 
 		socket.on('quit', () => {
+			This.debug(`Receive [${This.id}] [quit]`);
 			This.closePeerConnection();
 		});
 	}
@@ -130,18 +139,15 @@ class Connection {
 		}
 	}
 
-	handleOffer(sdp, usePlanB, roomId) {
-		const option = { usePlanB: usePlanB };
-
-		let desc = new RTCSessionDescription({
-			type : 'offer',
-			sdp	: sdp
-		});
-
+	handleOffer(sdp, usePlanB) {
 		let This = this;
 		
-		let room = this.server.getRoom(roomId);
-		this.peerconnection = new RTCPeerConnection(room.soup, this.id, option);
+		let room = this.server.getRoom(this.roomId);
+		this.mediaPeer = room.mediaRoom.Peer(this.id);
+		this.peerconnection = new RTCPeerConnection({ 
+			peer: this.mediaPeer,
+			usePlanB: usePlanB 
+		});
 		let peerconnection = this.peerconnection;
 		peerconnection.on('close', function(err) {
 			if(err) {
@@ -156,69 +162,43 @@ class Connection {
 		});		
 
 		// Set the remote SDP offer
-		peerconnection.setRemoteDescription(desc)
+		peerconnection.setCapabilities(sdp)
 		.then(() => {
-			return peerconnection.createAnswer();
-		})
-		.then((desc) => {
-			return peerconnection.setLocalDescription(desc);
-		})
-		.then(() => {
-//			console.log(peerconnection.localDescription.sdp);
-//			console.log(util.inspect(sdp_transform.parse(peerconnection.localDescription.sdp), {depth: 10}));
-			This.sendAnswer();
-			This.sendStream();
-		})
-		.catch((error) => {
-			console.error('Error handling SDP offer: ', error);
-			This.closePeerConnection();
+			console.log('after setCapabilities');
+			This.sendOffer();
 		});
 
 		// Handle 'negotiationneeded' event
 		peerconnection.on('negotiationneeded', () => {
 			This.debug(`PeerConnection [${This.id}] negotiation needed`);
-			peerconnection.createOffer()
-			.then((desc) => {
-				return peerconnection.setLocalDescription(desc);
-			})
-			.then(() => {
-				This.sendOffer();
-				This.sendStream();
-			})
-			.catch((error) => {
-				console.error(`Error handling SDP re-offer id[${This.id}], err: ${error}`);
-			});
+			This.sendOffer();
+		});
+		peerconnection.on('leave', () => {
+			This.debug(`PeerConnection [${This.id}] leaves`);
+			This.closePeerConnection();
 		});
 	}
 
-	handleAnswer(sdp) {
-		let desc = new RTCSessionDescription({
-			type : 'answer',
-			sdp	: sdp
-		});
-
-		let This = this;
-		
-		let peerconnection = this.peerconnection;
-		peerconnection.setRemoteDescription(desc)
-		.then( function() {
-			This.debug(`PeerConnection [${this.id}] set remote description`);
-		})
-		.catch( (err) => {
-			console.eror(`PeerConnection [${this.id}] set remote description error: ${err}`);
-		});
+	handleAnswer(answer) {
+		this.peerconnection.setRemoteDescription(answer);
 	}
 
 	sendOffer() {
-		let sessionDescription = this.peerconnection.localDescription;
-		this.send(sessionDescription.type, sessionDescription.sdp);
-		// TODO send offer to all room members
-//		this.sendRoom(sessionDescription.type, sessionDescription.sdp);
-	}
-	
-	sendAnswer() {
-		let sessionDescription = this.peerconnection.localDescription;
-		this.send(sessionDescription.type, sessionDescription.sdp);
+		let This = this;
+		
+		This.peerconnection.createOffer()
+		.then((desc) => {
+			return This.peerconnection.setLocalDescription(desc);
+		})
+		.then(() => {
+			let sessionDescription = This.peerconnection.localDescription;
+			This.send(sessionDescription.type, sessionDescription.sdp);
+			This.sendStream();
+		})
+        .catch((err) => {
+        	console.error(err);
+        	This.peerconnection.reset();
+        });
 	}
 	
 	//TODO - execute the ffmpeg on remote machine
@@ -689,6 +669,8 @@ class Server {
 		this.connections = {};
 		this.rooms = {};
 		this.roomsList = {};
+		
+		this.mediaServer = mediasoup.Server(options);
 	}
 	
 	getRoomsList() {
@@ -700,7 +682,7 @@ class Server {
 	}
 	
 	addRoom(name) {
-		let room = new Room(name);
+		let room = new Room(this.mediaServer, name);
 		this.rooms[room.id] = room;
 		this.roomsList[room.id] = room.name;
 
@@ -758,7 +740,6 @@ class Server {
 	}
 }
 
-
 const server = new Server({
 	enableDebug: true,
 	key: fs.readFileSync('keys/server.key'),
@@ -772,9 +753,15 @@ const server = new Server({
 	rtmpURL: 'rtmp://127.0.0.1:1936/live/',
 	outputType: OutputTypes.MP4,
 //	ffmpegPath: 'ffmpeg',
-	vlcPath: 'cvlc',
+//	vlcPath: 'cvlc',
 	
-	rtspPort: 5000
+	rtspPort: 5000,
+
+    logLevel   : "debug",
+    rtcIPv4    : true,
+    rtcIPv6    : false,
+    rtcMinPort : 40000,
+    rtcMaxPort : 49999
 });
 
 

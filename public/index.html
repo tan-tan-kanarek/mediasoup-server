@@ -92,6 +92,10 @@ function sendOffer(sdp) {
 	});
 }
 
+function sendAnswer(answer) {
+	send('joined', answer);
+}
+
 function send(type, data) {
 	console.log('Sending [' + type + ']: ', data);
 	socket.emit(type, data);
@@ -238,7 +242,6 @@ function prepareNewConnection() {
 			console.log(evt.candidate);
 		} else {
 			console.log('Empty ICE event');
-			sendOffer(peer.localDescription.sdp);
 		}
 	};
 	peer.onnegotiationneeded = function(evt) {
@@ -284,13 +287,15 @@ function prepareNewConnection() {
 
 function makeOffer() {
 	peerConnection = prepareNewConnection();
-	peerConnection.createOffer()
+	peerConnection.createOffer({
+		offerToReceiveAudio : 1,
+		offerToReceiveVideo : 1
+	})
 	.then(function (sessionDescription) {
 		console.log('Offer created');
-		return peerConnection.setLocalDescription(sessionDescription);
-	}).then(function() {
-		console.log('Set local description');
-	}).catch(function(err) {
+		sendOffer(sessionDescription.sdp);
+	})
+	.catch(function(err) {
 		console.error(err);
 	});
 }
@@ -324,7 +329,8 @@ function makeAnswer() {
 		console.log('Create answer');
 		return peerConnection.setLocalDescription(sessionDescription);
 	}).then(function() {
-		console.log('Set local description');
+		let answer = peerConnection.localDescription;
+		sendAnswer(answer);
 	}).catch(function(err) {
 		console.error(err);
 	});

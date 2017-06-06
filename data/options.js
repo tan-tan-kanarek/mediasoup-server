@@ -6,17 +6,17 @@ module.exports =
 	{
 		mediaCodecs :
 		[
-//			{
-//				kind        : 'audio',
-//				name        : 'audio/opus',
-//				clockRate   : 48000,
-//				numChannels : 2
-//			},
 			{
 				kind        : 'audio',
-				name        : 'audio/PCMU',
-				clockRate   : 8000
+				name        : 'audio/opus',
+				clockRate   : 48000,
+				numChannels : 2
 			},
+//			{
+//				kind        : 'audio',
+//				name        : 'audio/PCMU',
+//				clockRate   : 8000
+//			},
 //			{
 //				kind      : 'video',
 //				name      : 'video/vp8',
@@ -52,19 +52,19 @@ module.exports =
 	{
 		codecs :
 		[
-//			{
-//				kind        : 'audio',
-//				name        : 'audio/opus',
-//				payloadType : 100,
-//				clockRate   : 48000,
-//				numChannels : 2
-//			},
 			{
 				kind        : 'audio',
-				name        : 'audio/PCMU',
-				payloadType : 0,
-				clockRate   : 8000
+				name        : 'audio/opus',
+				payloadType : 100,
+				clockRate   : 48000,
+				numChannels : 2
 			},
+//			{
+//				kind        : 'audio',
+//				name        : 'audio/PCMU',
+//				payloadType : 0,
+//				clockRate   : 8000
+//			},
 //			{
 //				kind        : 'video',
 //				name        : 'video/VP8',
