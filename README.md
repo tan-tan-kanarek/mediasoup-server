@@ -8,14 +8,10 @@ All stream are forwarded to ffmpeg as RTMP stream or as media file.
 # TODO
 
 ## Server
-* Upgrade to mediasoup v0.5.
-* Fix Firefox support.
 * Execute ffmpeg remotely (send message to different server to execute ffmpeg)
-* Send all connected sockets when new room created.
 * To support scalability and redundancy, hold list of rooms in all servers and redirect socket.io commands to the server that handles the room, SDPs should be generated on the server that holds the room.
 
 ## Client
-* Update remote videos view when a new participant joins.
 * Rejoin room when socket.io reconnected.
 * Accept new room created event.
 
