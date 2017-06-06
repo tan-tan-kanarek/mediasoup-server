@@ -39,3 +39,4 @@ jspm_packages
 # additinonal
 .vscode
 .python-version
+/.project
