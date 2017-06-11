@@ -27,7 +27,6 @@ const roomOptions = require('./data/options').roomOptions;
 
 const OutputTypes = {
 	RTMP: 1,
-	MKV: 2,
 	MP4: 3
 };
 
@@ -213,36 +212,23 @@ class Connection {
 	//TODO - execute the ffmpeg on remote machine
 	ffmpeg(input) {
 		let args = [
-			'-loglevel', 'debug',	
-			'-max_delay', '5000', 
-//			'-thread_queue_size', '2048', 
-			'-reorder_queue_size', '16384', 
-//			'-analyzeduration', '2147483647', 
-//			'-probesize', '2147483647', 
+//			'-loglevel', 'debug',	
+			'-analyzeduration', '2147483647', 
+			'-probesize', '2147483647', 
 			'-protocol_whitelist', 'file,crypto,tcp,udp,rtp',
-//			'-rtbufsize', '128000k',
-			'-re',  
 			'-i', input,
 		];
 
-//		args.push('-c', 'copy');
 		args.push('-vcodec', 'copy');
 		args.push('-acodec', 'aac');
-		
-//		args.push('-vsync', 'passthrough');
-//		args.push('-q', '10');
-//		args.push('-max_interleave_delta', '30000000');
-//		args.push('-max_delay', '100000');
-//		args.push('-framerate', '50');
 		args.push('-shortest');
-//		args.push('-map', '0:v', '-map', '1:a');
 
 		if(this.server.options.outputType === OutputTypes.RTMP) {
 			args.push('-f', 'flv');
 			args.push(this.server.options.rtmpURL + this.id);
 		}
-		else {
-			let ext = this.server.options.outputType === OutputTypes.MKV ? 'mkv' : 'mp4'
+		else if(this.server.options.outputType === OutputTypes.MP4) {
+			let ext = 'mp4';
 			let outputFilePath = this.server.options.recordedMediaPath +	`/${this.id}.${ext}`;
 			args.push('-y');
 			args.push(outputFilePath);
@@ -762,10 +748,10 @@ const server = new Server({
 	sdpPath: path.join(__dirname, "recordings"),
 	logPath: path.join(__dirname, "recordings"),
 	recordedMediaPath: path.join(__dirname, "recordings"),
-	rtmpURL: 'rtmp://127.0.0.1:1936/live/',
+	rtmpURL: 'rtmp://127.0.0.1:1935/live/',
 	outputType: OutputTypes.MP4,
-//	ffmpegPath: 'ffmpeg',
-	vlcPath: 'cvlc',
+	ffmpegPath: 'ffmpeg',
+//	vlcPath: 'cvlc', // don't use vlc, the audio and video are not synchronized correctly for some reason.
 	
 	rtspPort: 5000,
 
