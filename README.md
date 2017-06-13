@@ -20,7 +20,7 @@ $ npm install mediasoup-server
 ## Run WebRTC server
 
 ```javascript
-const WebRtcServer = require('./index.js').WebRtcServer;
+const WebRtcServer = require('mediasoup-server').WebRtcServer;
 
 const hostname = os.hostname();
 
@@ -71,7 +71,7 @@ webRtcServer
 ## Run RTSP server
 
 ```javascript
-const RtspServer = require('./index.js').RtspServer;
+const RtspServer = require('mediasoup-server').RtspServer;
 
 const rtspServer = new RtspServer(webRtcServer);
 rtspServer
