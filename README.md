@@ -123,7 +123,7 @@ rtspServer
 		let rtmpUrl = `rtmp://${hostname}:1935/live/${source.id}`;
 		let logpath = `${recordingsPath}/${source.id}.log`;
 		
-		console.log(`Recording [${source.id}]: ${filepath}`);
+		console.log(`Publishing [${source.id}]: ${rtmpUrl}`);
 		let process = streamer.publish(rtspUrl, rtmpUrl, logpath)
 		.on('error', (err) => {
 			console.error(`Streamer [${source.id}] error: ${err}`);
