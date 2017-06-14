@@ -1,11 +1,11 @@
 {
   "name": "mediasoup-server",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "description": "WebRTC SFU mediasoup implementation",
-  "main": "server.js",
+  "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node server.js"
+    "start": "node example.js"
   },
   "repository": {
     "type": "git",
@@ -25,7 +25,7 @@
   "dependencies": {
     "express": "^4.14.0",
     "ip": "^1.1.5",
-    "mediasoup": "^1.2.2",
+    "mediasoup": "^1.2.5",
     "rtsp-stream": "^1.0.0",
     "sdp-transform": "^2.3.0",
     "socket.io": "^1.7.3",
