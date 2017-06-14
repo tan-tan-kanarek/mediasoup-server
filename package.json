@@ -23,6 +23,7 @@
   },
   "homepage": "https://github.com/tan-tan-kanarek/mediasoup-server",
   "dependencies": {
+    "bluebird": "^3.5.0",
     "express": "^4.14.0",
     "ip": "^1.1.5",
     "mediasoup": "^1.2.5",
