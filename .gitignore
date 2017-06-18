@@ -40,3 +40,4 @@ jspm_packages
 .vscode
 .python-version
 /.project
+.DS_Store

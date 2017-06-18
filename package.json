@@ -1,6 +1,6 @@
 {
   "name": "mediasoup-server",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "WebRTC SFU mediasoup implementation",
   "main": "index.js",
   "scripts": {
@@ -23,6 +23,7 @@
   },
   "homepage": "https://github.com/tan-tan-kanarek/mediasoup-server",
   "dependencies": {
+    "bluebird": "^3.5.0",
     "express": "^4.14.0",
     "ip": "^1.1.5",
     "mediasoup": "^1.2.5",
