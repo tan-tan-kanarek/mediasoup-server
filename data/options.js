@@ -19,24 +19,23 @@ module.exports =
 //				payloadType : 0,
 //				clockRate   : 8000
 //			},
-			
 //			{
 //				kind      : 'video',
 //				name      : 'video/vp8',
 //				payloadType : 101,
 //				clockRate : 90000
 //			}
-
-			{
-				kind       : 'video',
-				name       : 'video/h264',
-				payloadType: 102,
-				clockRate  : 90000,
-				parameters :
-				{
-					packetizationMode : 0
-				}
-			},
+//			,
+//			{
+//				kind       : 'video',
+//				name       : 'video/h264',
+//				payloadType: 102,
+//				clockRate  : 90000,
+//				parameters :
+//				{
+//					packetizationMode : 0
+//				}
+//			},
 			{
 				kind       : 'video',
 				name       : 'video/h264',
