@@ -1,6 +1,6 @@
 {
   "name": "mediasoup-server",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "WebRTC SFU mediasoup implementation",
   "main": "index.js",
   "scripts": {
