@@ -1,3 +1,5 @@
+*Note:* This project uses old version of mediasoup and won't be updated any time soon.
+
 # mediasoup-server
 WebRTC SFU mediasoup implementation
 * Optional RTSP server to play the streams.
